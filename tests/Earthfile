@@ -1,0 +1,32 @@
+test-all:
+    BUILD +test-help
+    BUILD +test-bkup
+
+test-help:
+    FROM alpine
+    COPY ..+acbup/acbup /bin/.
+    RUN acbup --help 2>&1 | grep 'display this help'
+
+test:
+    FROM alpine
+    COPY ..+acbup/acbup /bin/.
+    RUN echo "src=/root/files" > acbup.conf && \
+        echo "dst=/root/bkup" >> acbup.conf
+
+    RUN mkdir /root/files
+    RUN echo "alpha" > /root/files/a.txt
+    RUN echo "bravo" > /root/files/b.txt
+    RUN echo "charlie" > /root/files/c.txt
+    RUN echo "delta" > /root/files/d.txt
+
+    RUN mkdir -p /root/files/sub/dir
+    RUN echo "echo" > /root/files/sub/dir/e.txt
+
+    RUN acbup --config=acbup.conf
+    RUN acbup --config=acbup.conf
+    RUN acbup --config=acbup.conf --list | tee output.txt
+    RUN test "$(head -n 1 output.txt)" = "/root/files/a.txt"
+    RUN test "$(head -n 2 output.txt | tail -n 1)" = "/root/files/b.txt"
+    RUN test "$(head -n 3 output.txt | tail -n 1)" = "/root/files/c.txt"
+    RUN test "$(head -n 4 output.txt | tail -n 1)" = "/root/files/d.txt"
+    RUN test "$(tail -n 1 output.txt)" = "/root/files/sub/dir/e.txt"
