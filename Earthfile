@@ -32,7 +32,7 @@ deps:
 
 code:
     FROM +deps
-    COPY --dir pack cmd ./
+    COPY --dir pack util cmd ./
 
 lint:
     FROM +code

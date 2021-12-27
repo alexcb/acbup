@@ -23,7 +23,26 @@ test-bkup:
     RUN echo "echo" > /root/files/sub/dir/e.txt
 
     RUN acbup --config=acbup.conf
+    RUN ls /root/bkup/refs/meta
+    RUN ls /root/bkup/refs/meta.sha1
+    RUN ls /root/bkup/refs/meta.bkup
+
     RUN acbup --config=acbup.conf
+    RUN acbup --config=acbup.conf --list | tee output.txt
+    RUN test "$(head -n 1 output.txt)" = "/root/files/a.txt"
+    RUN test "$(head -n 2 output.txt | tail -n 1)" = "/root/files/b.txt"
+    RUN test "$(head -n 3 output.txt | tail -n 1)" = "/root/files/c.txt"
+    RUN test "$(head -n 4 output.txt | tail -n 1)" = "/root/files/d.txt"
+    RUN test "$(tail -n 1 output.txt)" = "/root/files/sub/dir/e.txt"
+
+    # corrupt the refs metadata with 3 bogus bytes at position 10
+    RUN printf '\x31\xc0\xc3' | dd of=/root/bkup/refs/meta bs=1 seek=10 count=3 conv=notrunc
+
+    # TODO implement these
+    # RUN echo acbup --config=acbup.conf --verify
+    # RUN echo acbup --config=acbup.conf --recover
+
+    # should still work
     RUN acbup --config=acbup.conf --list | tee output.txt
     RUN test "$(head -n 1 output.txt)" = "/root/files/a.txt"
     RUN test "$(head -n 2 output.txt | tail -n 1)" = "/root/files/b.txt"
