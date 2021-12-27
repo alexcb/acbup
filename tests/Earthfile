@@ -22,6 +22,8 @@ test-bkup:
     RUN mkdir -p /root/files/sub/dir
     RUN echo "echo" > /root/files/sub/dir/e.txt
 
+    RUN find /root/files/ -type f | sort | xargs md5sum > /root/files.md5.before
+
     RUN acbup --config=acbup.conf
 
     # bee07a7f6a5e8ae619273e1a143562cbb5468d7c is the contents of the ref entry for the above test /root/files/...
@@ -78,7 +80,13 @@ test-bkup:
     RUN acbup --config=acbup.conf --recover
     RUN test "$(cat /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup | sha1sum - | awk '{print $1}')" = "d046cd9b7ffb7661e449683313d41f6fc33e3130"
 
+    # finally make sure original local files were never changed
+    RUN find /root/files/ -type f | sort | xargs md5sum > /root/files.md5.after
+    RUN diff /root/files.md5.before /root/files.md5.after
+
     # next change the local copy to test acbup detects the change and prompts the user on what to do.
     RUN echo "aleph" > /root/files/a.txt
     RUN set -o pipefail && ((acbup --config=acbup.conf 2>&1 | tee output.txt) || (touch /failed)) && rm /failed
     RUN cat output.txt | grep 'local copy of /root/files/a.txt has been changed since backup'
+
+	# TODO improve the above local-file recovery experience so it can prompt for input; currently it just panics.
