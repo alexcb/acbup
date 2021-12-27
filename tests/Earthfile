@@ -1,4 +1,4 @@
-test-all:
+all:
     BUILD +test-help
     BUILD +test-bkup
 
@@ -7,7 +7,7 @@ test-help:
     COPY ..+acbup/acbup /bin/.
     RUN acbup --help 2>&1 | grep 'display this help'
 
-test:
+test-bkup:
     FROM alpine
     COPY ..+acbup/acbup /bin/.
     RUN echo "src=/root/files" > acbup.conf && \

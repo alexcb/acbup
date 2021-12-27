@@ -52,12 +52,16 @@ lint:
             echo "$output" ; \
             exit 1 ; \
         fi
-unittest:
+unit-test:
     FROM +code
     RUN go test ./...
+
+test:
+    BUILD +lint
+    BUILD +unit-test
+    BUILD ./tests+all
 
 acbup:
     FROM +code
     RUN go build -o build/acbup cmd/acbup/*.go
     SAVE ARTIFACT build/acbup AS LOCAL "build/acbup"
-
