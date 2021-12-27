@@ -28,7 +28,7 @@ test-bkup:
     RUN ls /root/bkup/refs/meta.bkup
 
     RUN acbup --config=acbup.conf
-    RUN acbup --config=acbup.conf --list | tee output.txt
+    RUN set -o pipefail && acbup --config=acbup.conf --list | tee output.txt
     RUN test "$(head -n 1 output.txt)" = "/root/files/a.txt"
     RUN test "$(head -n 2 output.txt | tail -n 1)" = "/root/files/b.txt"
     RUN test "$(head -n 3 output.txt | tail -n 1)" = "/root/files/c.txt"
@@ -43,9 +43,19 @@ test-bkup:
     # RUN echo acbup --config=acbup.conf --recover
 
     # should still work
-    RUN acbup --config=acbup.conf --list | tee output.txt
+    RUN set -o pipefail && acbup --config=acbup.conf --list | tee output.txt
     RUN test "$(head -n 1 output.txt)" = "/root/files/a.txt"
     RUN test "$(head -n 2 output.txt | tail -n 1)" = "/root/files/b.txt"
     RUN test "$(head -n 3 output.txt | tail -n 1)" = "/root/files/c.txt"
     RUN test "$(head -n 4 output.txt | tail -n 1)" = "/root/files/d.txt"
     RUN test "$(tail -n 1 output.txt)" = "/root/files/sub/dir/e.txt"
+
+    # next corrupt the backed up file
+    RUN echo "extra-data" >> /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130
+    RUN echo TODO: implement a --verify / --recover mode. Currently we just re-upload the existing local file.
+    RUN set -o pipefail && acbup --config=acbup.conf | tee output.txt
+
+    # next change the local copy to test acbup detects the change and prompts the user on what to do.
+    RUN echo "aleph" > /root/files/a.txt
+    RUN set -o pipefail && ((acbup --config=acbup.conf 2>&1 | tee output.txt) || (touch /failed)) && rm /failed
+    RUN cat output.txt | grep 'local copy of /root/files/a.txt has been changed since backup'

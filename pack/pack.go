@@ -25,8 +25,9 @@ type Pack interface {
 }
 
 type packImp struct {
-	root string
-	refs map[string]string
+	root     string
+	refs     []*refEntry
+	refIndex map[string]*refEntry
 }
 
 // New returns a new Pack
@@ -41,17 +42,20 @@ func New(packRoot string) (Pack, error) {
 		return nil, err
 	}
 
-	refs := map[string]string{}
+	var refs []*refEntry
+	refIndex := map[string]*refEntry{}
 	if fileutil.FileExists(refPath) {
 		refs, err = readRefs(refPath)
 		if err != nil {
 			return nil, err
 		}
+		refIndex = buildRefIndex(refs)
 	}
 
 	p := &packImp{
-		root: packRoot,
-		refs: refs,
+		root:     packRoot,
+		refIndex: refIndex,
+		refs:     refs,
 	}
 
 	return p, nil
@@ -182,7 +186,20 @@ func restoreFromBkup(path, expectedSha1 string) error {
 	return nil
 }
 
-func readRefs(path string) (map[string]string, error) {
+type refEntry struct {
+	path string
+	sha1 string
+}
+
+func buildRefIndex(refs []*refEntry) map[string]*refEntry {
+	m := map[string]*refEntry{}
+	for _, ref := range refs {
+		m[ref.path] = ref
+	}
+	return m
+}
+
+func readRefs(path string) ([]*refEntry, error) {
 	refsSha1, err := getSha1(path)
 	if err != nil {
 		return nil, err
@@ -205,7 +222,7 @@ func readRefs(path string) (map[string]string, error) {
 	}
 	defer file.Close()
 
-	m := map[string]string{}
+	refs := []*refEntry{}
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -221,12 +238,15 @@ func readRefs(path string) (map[string]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		m[path] = dataRef
+		refs = append(refs, &refEntry{
+			path: path,
+			sha1: dataRef,
+		})
 	}
-	return m, nil
+	return refs, nil
 }
 
-func writeRefs(path string, refs map[string]string) error {
+func writeRefs(path string, refs []*refEntry) error {
 	pathTmp := path + ".tmp"
 
 	pathSha := path + ".sha1"
@@ -240,9 +260,9 @@ func writeRefs(path string, refs map[string]string) error {
 	w := bufio.NewWriter(f)
 
 	h := sha1.New()
-	for path, ref := range refs {
-		encPath := encodePath(path)
-		data := fmt.Sprintf("%s %s\n", encPath, ref)
+	for _, ref := range refs {
+		encPath := encodePath(ref.path)
+		data := fmt.Sprintf("%s %s\n", encPath, ref.sha1)
 		_, err := io.WriteString(w, data)
 		if err != nil {
 			return err
@@ -310,6 +330,13 @@ func (p *packImp) AddFile(path string) error {
 		return err
 	}
 
+	if ref, ok := p.refIndex[path]; ok {
+		if ref.sha1 != inputHash {
+			fmt.Fprintf(os.Stderr, "ERROR: local copy of %s has been changed since backup; curent hash %s vs backed up %s\n", path, inputHash, ref.sha1)
+			panic("TODO: prompt user on what to do -- accept file modification, or assume local copy was corrupted")
+		}
+	}
+
 	dataPathParts := []string{p.root, "data"}
 	dataPathParts = append(dataPathParts, splitShaToPath(inputHash)...)
 	dataPath := filepath.Join(dataPathParts...)
@@ -327,10 +354,9 @@ func (p *packImp) AddFile(path string) error {
 		return err
 	}
 	if inputHash != currentBackupSha1 {
+		// the backed up copy must be corrupt, if not then it would have been stored under a different path
 		fmt.Fprintf(os.Stderr, "ERROR WARNING CORRUPT DATA FOUND!!!! re-backing up data %q -> %q; %s\n", path, inputHash, dataPath)
 		return copyFile(path, dataPath, inputHash)
-		// the backed up copy must be corrupt, if not then it would have been stored under a different path
-		//panic("backup is corrupt, gotta replace it!")
 	}
 
 	fmt.Fprintf(os.Stderr, "%q -> %q; %s already backedup (and verified)\n", path, inputHash, dataPath)
@@ -355,8 +381,8 @@ func (p *packImp) AddDir(path string) error {
 // List lists files in the pack
 func (p *packImp) List() ([]string, error) {
 	files := []string{}
-	for k := range p.refs {
-		files = append(files, k)
+	for _, ref := range p.refIndex {
+		files = append(files, ref.path)
 	}
 	sort.Strings(files)
 	return files, nil
@@ -384,7 +410,20 @@ func (p *packImp) addMeta(path, sha1 string) error {
 		panic("bad path")
 	}
 
-	p.refs[path] = sha1
+	// keep existing if up to date
+	if ref, ok := p.refIndex[path]; ok && ref.sha1 == sha1 {
+		if ref.path != path {
+			panic("ref path is corrupt")
+		}
+		return nil
+	}
+
+	ref := &refEntry{
+		path: path,
+		sha1: sha1,
+	}
+	p.refs = append(p.refs, ref)
+	p.refIndex[path] = ref
 
 	return nil
 }
