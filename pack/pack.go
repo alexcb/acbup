@@ -2,6 +2,7 @@ package pack
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha1"
 	"encoding/base64"
 	"errors"
@@ -32,24 +33,26 @@ type packImp struct {
 
 // New returns a new Pack
 func New(packRoot string) (Pack, error) {
-	refPathParts := []string{packRoot, "refs", "meta"}
-	refPath := filepath.Join(refPathParts...)
-
-	// TODO check packRoot exists first
-
-	err := os.MkdirAll(filepath.Join(packRoot, "refs"), 0700)
-	if err != nil {
-		return nil, err
-	}
-
 	var refs []*refEntry
 	refIndex := map[string]*refEntry{}
-	if fileutil.FileExists(refPath) {
-		refs, err = readRefs(refPath)
+
+	refsPath := filepath.Join(packRoot, "refs")
+	if fileutil.FileExists(refsPath) {
+		refsSha1, err := readExpectedSha1(refsPath)
+		if err != nil {
+			return nil, err
+		}
+
+		refsSha1Path := []string{packRoot, "data"}
+		refsSha1Path = append(refsSha1Path, splitShaToPath(refsSha1)...)
+		path := filepath.Join(refsSha1Path...)
+
+		refs, err = readRefs(path, refsSha1)
 		if err != nil {
 			return nil, err
 		}
 		refIndex = buildRefIndex(refs)
+
 	}
 
 	p := &packImp{
@@ -63,9 +66,7 @@ func New(packRoot string) (Pack, error) {
 
 // Close closes the pack
 func (p *packImp) Close() error {
-	refPathParts := []string{p.root, "refs", "meta"}
-	refPath := filepath.Join(refPathParts...)
-	return writeRefs(refPath, p.refs)
+	return p.writeRefs(p.refs)
 }
 
 func splitShaToPath(s string) []string {
@@ -199,16 +200,12 @@ func buildRefIndex(refs []*refEntry) map[string]*refEntry {
 	return m
 }
 
-func readRefs(path string) ([]*refEntry, error) {
+func readRefs(path, expectedSha1 string) ([]*refEntry, error) {
 	refsSha1, err := getSha1(path)
 	if err != nil {
 		return nil, err
 	}
 
-	expectedSha1, err := readExpectedSha1(path + ".sha1")
-	if err != nil {
-		return nil, err
-	}
 	if refsSha1 != expectedSha1 {
 		err = restoreFromBkup(path, expectedSha1)
 		if err != nil {
@@ -246,20 +243,10 @@ func readRefs(path string) ([]*refEntry, error) {
 	return refs, nil
 }
 
-func writeRefs(path string, refs []*refEntry) error {
-	pathTmp := path + ".tmp"
+func (p *packImp) writeRefs(refs []*refEntry) error {
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
 
-	pathSha := path + ".sha1"
-	pathShaTmp := pathSha + ".tmp"
-
-	f, err := os.OpenFile(pathTmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
-	}
-
-	w := bufio.NewWriter(f)
-
-	h := sha1.New()
 	for _, ref := range refs {
 		encPath := encodePath(ref.path)
 		data := fmt.Sprintf("%s %s\n", encPath, ref.sha1)
@@ -267,31 +254,37 @@ func writeRefs(path string, refs []*refEntry) error {
 		if err != nil {
 			return err
 		}
-		_, err = io.WriteString(h, data)
-		if err != nil {
-			return err
-		}
 	}
 
-	err = w.Flush()
+	err := w.Flush()
 	if err != nil {
 		return err
 	}
 
-	err = f.Close()
-	if err != nil {
-		return err
-	}
+	data := buf.String()
 
 	// write sha1
+	h := sha1.New()
+	h.Write([]byte(data))
 	hash := fmt.Sprintf("%x", h.Sum(nil))
 
-	sha1File, err := os.OpenFile(pathShaTmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	dataPathParts := []string{p.root, "data"}
+	dataPathParts = append(dataPathParts, splitShaToPath(hash)...)
+	dataPath := filepath.Join(dataPathParts...)
+
+	dirPath := filepath.Dir(dataPath)
+	err = os.MkdirAll(dirPath, 0700)
 	if err != nil {
 		return err
 	}
 
-	_, err = io.WriteString(sha1File, hash)
+	fmt.Fprintf(os.Stderr, "writing to %s\n", dataPath)
+	sha1File, err := os.OpenFile(dataPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+
+	_, err = io.WriteString(sha1File, data)
 	if err != nil {
 		return err
 	}
@@ -301,26 +294,26 @@ func writeRefs(path string, refs []*refEntry) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "renaming %s -> %s\n", pathTmp, path)
-	err = os.Rename(pathTmp, path)
-	if err != nil {
-		return err
-	}
-
 	// TODO create parity bits instead
-	pathCopy := path + ".bkup"
-	fmt.Fprintf(os.Stderr, "creating backup %s -> %s\n", path, pathCopy)
-	err = fileutil.CopyFileContents(path, pathCopy)
+	pathCopy := dataPath + ".bkup"
+	fmt.Fprintf(os.Stderr, "creating backup %s -> %s\n", dataPath, pathCopy)
+	err = fileutil.CopyFileContents(dataPath, pathCopy)
 	if err != nil {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "renaming %s -> %s\n", pathShaTmp, pathSha)
-	err = os.Rename(pathShaTmp, pathSha)
+	refsPath := filepath.Join(p.root, "refs")
+	fmt.Fprintf(os.Stderr, "writing to %s\n", refsPath)
+	file, err := os.OpenFile(refsPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
-	return nil
+	_, err = io.WriteString(file, hash)
+	if err != nil {
+		return err
+	}
+
+	return file.Close()
 }
 
 // AddFile adds a file to the pack
