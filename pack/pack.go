@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/alexcb/acbup/util/fileutil"
+	"github.com/alexcb/acbup/util/promptutil"
 )
 
 // Pack defines the pack interface
@@ -25,17 +26,19 @@ type Pack interface {
 	List() ([]string, error)
 	Verify() bool
 	Recover() (int, int, int, error)
+	Restore(string) error
 }
 
 type packImp struct {
-	root     string
-	refs     []*refEntry
-	refIndex map[string]*refEntry
-	readOnly bool
+	root        string
+	refs        []*refEntry
+	refIndex    map[string]*refEntry
+	readOnly    bool
+	interactive bool
 }
 
 // New returns a new Pack
-func New(packRoot string, readOnly bool) (Pack, error) {
+func New(packRoot string, readOnly, interactive bool) (Pack, error) {
 	var refs []*refEntry
 	refIndex := map[string]*refEntry{}
 
@@ -60,10 +63,11 @@ func New(packRoot string, readOnly bool) (Pack, error) {
 	}
 
 	p := &packImp{
-		root:     packRoot,
-		refIndex: refIndex,
-		refs:     refs,
-		readOnly: readOnly,
+		root:        packRoot,
+		refIndex:    refIndex,
+		refs:        refs,
+		readOnly:    readOnly,
+		interactive: interactive,
 	}
 
 	return p, nil
@@ -376,7 +380,16 @@ func (p *packImp) AddFile(path string) error {
 	if ref, ok := p.refIndex[path]; ok {
 		if ref.sha1 != inputHash {
 			fmt.Fprintf(os.Stderr, "ERROR: local copy of %s has been changed since backup; curent hash %s vs backed up %s\n", path, inputHash, ref.sha1)
-			panic("TODO: prompt user on what to do -- accept file modification, or assume local copy was corrupted")
+			if !p.interactive {
+				return fmt.Errorf("unable to save/skip changed file in non-interactive mode")
+			}
+			choice, err := promptutil.Prompt("Save the new version of %s? [y/N] ", []string{"y", "n"}, 1, true)
+			if err != nil {
+				return err
+			}
+			if choice == "n" {
+				return nil
+			}
 		}
 	}
 
@@ -539,6 +552,37 @@ func (p *packImp) Recover() (int, int, int, error) {
 	return numOK, numRecovered, numFailed, nil
 }
 
+// Restore overwrites the local file with the backed up file
+func (p *packImp) Restore(localPath string) error {
+	absPath, err := filepath.Abs(localPath)
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(absPath, "/") {
+		panic("bad path")
+	}
+
+	ref, ok := p.refIndex[localPath]
+	if !ok {
+		return fmt.Errorf("%s not in backup", absPath)
+	}
+
+	bkupPath, err := getShaPath(p.root, ref.sha1, false)
+	if err != nil {
+		return err
+	}
+
+	actualSha1, err := getSha1(bkupPath)
+	if err != nil {
+		return err
+	}
+	if ref.sha1 != actualSha1 {
+		return fmt.Errorf("bkup %s is corrupt; expected %s but actual hash is %s", bkupPath, ref.sha1, actualSha1)
+	}
+
+	return fileutil.CopyFileContents(bkupPath, localPath)
+}
+
 func encodePath(path string) string {
 	return base64.StdEncoding.EncodeToString([]byte(path))
 }
@@ -562,19 +606,19 @@ func (p *packImp) addMeta(path, sha1 string) error {
 	}
 
 	// keep existing if up to date
-	if ref, ok := p.refIndex[path]; ok && ref.sha1 == sha1 {
-		if ref.path != path {
+	if ref, ok := p.refIndex[absPath]; ok && ref.sha1 == sha1 {
+		if ref.path != absPath {
 			panic("ref path is corrupt")
 		}
 		return nil
 	}
 
 	ref := &refEntry{
-		path: path,
+		path: absPath,
 		sha1: sha1,
 	}
 	p.refs = append(p.refs, ref)
-	p.refIndex[path] = ref
+	p.refIndex[absPath] = ref
 
 	return nil
 }

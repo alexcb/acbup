@@ -89,4 +89,8 @@ test-bkup:
     RUN set -o pipefail && ((acbup --config=acbup.conf 2>&1 | tee output.txt) || (touch /failed)) && rm /failed
     RUN cat output.txt | grep 'local copy of /root/files/a.txt has been changed since backup'
 
-	# TODO improve the above local-file recovery experience so it can prompt for input; currently it just panics.
+    RUN acbup --config=acbup.conf --restore-local-file-from-backup /root/files/a.txt
+
+    # test /root/files/a.txt was restored correctly
+    RUN find /root/files/ -type f | sort | xargs md5sum > /root/files.md5.after
+    RUN diff /root/files.md5.before /root/files.md5.after

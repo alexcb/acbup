@@ -7,12 +7,14 @@ import (
 	"strings"
 
 	"github.com/alexcb/acbup/pack"
+	"github.com/alexcb/acbup/util/termutil"
 
 	goflags "github.com/jessevdk/go-flags"
 )
 
 type flags struct {
 	Recover bool   `long:"recover" description:"attempt to fix corrupted data"`
+	Restore bool   `long:"restore-local-file-from-backup" description:"overwrites local file from backed up copy"`
 	Verify  bool   `long:"verify" description:"verify backup integrity"`
 	List    bool   `short:"l" long:"list" description:"list contents of backup"`
 	Config  string `short:"c" long:"config" description:"config file"`
@@ -86,17 +88,23 @@ func main() {
 		os.Exit(0)
 	}
 
+	if flags.Config == "" {
+		die("no config file was given\n")
+	}
+
 	src, dst, err := readConfig(flags.Config)
 	if err != nil {
 		die("failed to read config %s: %s\n", flags.Config, err)
 	}
 
-	if len(args) != 0 {
-		die("unhandled args: %v", args)
-	}
+	interactive := termutil.IsTTY()
 
 	if flags.Verify {
-		p, err := pack.New(dst, true)
+		if len(args) != 0 {
+			die("unhandled args: %v", args)
+		}
+
+		p, err := pack.New(dst, true, interactive)
 		if err != nil {
 			die("failed to create new Pack: %s\n", err)
 		}
@@ -109,9 +117,27 @@ func main() {
 		return
 	}
 
-	p, err := pack.New(dst, false)
+	p, err := pack.New(dst, false, interactive)
 	if err != nil {
 		die("failed to create new Pack: %s\n", err)
+	}
+
+	if flags.Restore {
+		if len(args) == 0 {
+			die("restore takes one or more local filepaths to restore")
+		}
+		for _, path := range args {
+			err := p.Restore(path)
+			if err != nil {
+				die("restore-local-file-from-backup of %s failed: %s\n", path, err)
+			}
+			fmt.Printf("restore-local-file-from-backup of %s done\n", path)
+		}
+		return
+	}
+
+	if len(args) != 0 {
+		die("unhandled args: %v", args)
 	}
 
 	if flags.Recover {
