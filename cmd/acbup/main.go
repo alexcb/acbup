@@ -11,7 +11,7 @@ import (
 	goflags "github.com/jessevdk/go-flags"
 )
 
-type Flags struct {
+type flags struct {
 	List   bool   `short:"l" long:"list" description:"list contents of backup"`
 	Config string `short:"c" long:"config" description:"config file"`
 	Help   bool   `short:"h" long:"help" description:"display this help"`
@@ -41,8 +41,7 @@ func readConfig(path string) (string, string, error) {
 		}
 		fields := strings.SplitN(line, "=", 2)
 		if len(fields) < 2 {
-			panic("bad config")
-			return "", "", fmt.Errorf("bad config line: %q\n", line)
+			return "", "", fmt.Errorf("bad config line: %q", line)
 		}
 		key := strings.TrimSpace(fields[0])
 		val := strings.TrimSpace(fields[1])
@@ -53,15 +52,15 @@ func readConfig(path string) (string, string, error) {
 		case "dst":
 			dst = val
 		default:
-			return "", "", fmt.Errorf("unsupported key: %q\n", key)
+			return "", "", fmt.Errorf("unsupported key: %q", key)
 		}
 
 	}
 	if src == "" {
-		return "", "", fmt.Errorf("src not defined\n")
+		return "", "", fmt.Errorf("src not defined")
 	}
 	if dst == "" {
-		return "", "", fmt.Errorf("dst not defined\n")
+		return "", "", fmt.Errorf("dst not defined")
 	}
 	return src, dst, nil
 }
@@ -73,7 +72,7 @@ func main() {
 	}
 	usage := fmt.Sprintf("%s [options]", progName)
 
-	flags := Flags{}
+	flags := flags{}
 	parser := goflags.NewNamedParser("", goflags.PrintErrors|goflags.PassDoubleDash|goflags.PassAfterNonOption)
 	parser.AddGroup(usage, "", &flags)
 	args, err := parser.ParseArgs(os.Args[1:])

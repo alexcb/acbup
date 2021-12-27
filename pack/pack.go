@@ -13,6 +13,7 @@ import (
 	"strings"
 )
 
+// Pack defines the pack interface
 type Pack interface {
 	AddDir(string) error
 	AddFile(string) error
@@ -25,6 +26,7 @@ type packImp struct {
 	refs map[string]string
 }
 
+// New returns a new Pack
 func New(packRoot string) (Pack, error) {
 	refPathParts := []string{packRoot, "refs", "meta"}
 	refPath := filepath.Join(refPathParts...)
@@ -52,6 +54,7 @@ func New(packRoot string) (Pack, error) {
 	return p, nil
 }
 
+// Close closes the pack
 func (p *packImp) Close() error {
 	refPathParts := []string{p.root, "refs", "meta"}
 	refPath := filepath.Join(refPathParts...)
@@ -200,6 +203,7 @@ func writeRefs(path string, refs map[string]string) error {
 	return os.Rename(pathTmp, path)
 }
 
+// AddFile adds a file to the pack
 func (p *packImp) AddFile(path string) error {
 	inputHash, err := getSha1(path)
 	if err != nil {
@@ -233,6 +237,7 @@ func (p *packImp) AddFile(path string) error {
 	return p.addMeta(path, inputHash)
 }
 
+// AddDir adds a dir to the pack
 func (p *packImp) AddDir(path string) error {
 	err := filepath.Walk(path,
 		func(path string, info os.FileInfo, err error) error {
@@ -247,6 +252,7 @@ func (p *packImp) AddDir(path string) error {
 	return err
 }
 
+// List lists files in the pack
 func (p *packImp) List() ([]string, error) {
 	files := []string{}
 	for k := range p.refs {

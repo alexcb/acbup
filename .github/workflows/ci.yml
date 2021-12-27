@@ -15,5 +15,5 @@ jobs:
         with:
           version: v0.6.2
       - uses: actions/checkout@v2
-      - name: run the earthly hello world
+      - name: +test
         run: earthly +test
