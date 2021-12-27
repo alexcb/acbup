@@ -23,31 +23,35 @@ type Pack interface {
 	AddFile(string) error
 	Close() error
 	List() ([]string, error)
+	Verify() bool
+	Recover() (int, int, int, error)
 }
 
 type packImp struct {
 	root     string
 	refs     []*refEntry
 	refIndex map[string]*refEntry
+	readOnly bool
 }
 
 // New returns a new Pack
-func New(packRoot string) (Pack, error) {
+func New(packRoot string, readOnly bool) (Pack, error) {
 	var refs []*refEntry
 	refIndex := map[string]*refEntry{}
 
 	refsPath := filepath.Join(packRoot, "refs")
 	if fileutil.FileExists(refsPath) {
-		refsSha1, err := readExpectedSha1(refsPath)
+		refsSha1, err := readFileContainingSha1Reference(refsPath)
 		if err != nil {
 			return nil, err
 		}
 
-		refsSha1Path := []string{packRoot, "data"}
-		refsSha1Path = append(refsSha1Path, splitShaToPath(refsSha1)...)
-		path := filepath.Join(refsSha1Path...)
+		path, err := getShaPath(packRoot, refsSha1, false)
+		if err != nil {
+			return nil, err
+		}
 
-		refs, err = readRefs(path, refsSha1)
+		refs, err = readRefs(path, refsSha1, readOnly)
 		if err != nil {
 			return nil, err
 		}
@@ -59,6 +63,7 @@ func New(packRoot string) (Pack, error) {
 		root:     packRoot,
 		refIndex: refIndex,
 		refs:     refs,
+		readOnly: readOnly,
 	}
 
 	return p, nil
@@ -79,6 +84,26 @@ func splitShaToPath(s string) []string {
 		s[4:6],
 		s,
 	}
+}
+
+func getShaPath(packRoot, sha1 string, mkDir bool) (string, error) {
+	if len(sha1) != 40 {
+		panic("invalid sha")
+	}
+
+	dataPathParts := []string{packRoot, "data"}
+	dataPathParts = append(dataPathParts, splitShaToPath(sha1)...)
+	path := filepath.Join(dataPathParts...)
+
+	if mkDir {
+		dirPath := filepath.Dir(path)
+		err := os.MkdirAll(dirPath, 0700)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	return path, nil
 }
 
 func getSha1(path string) (string, error) {
@@ -109,12 +134,6 @@ func getSha1(path string) (string, error) {
 }
 
 func copyFile(src, dst, expectedHash string) error {
-	dirPath := filepath.Dir(dst)
-	err := os.MkdirAll(dirPath, 0700)
-	if err != nil {
-		return err
-	}
-
 	const bufferSize = 1024 * 1024 * 16
 	srcFile, err := os.Open(src)
 	if err != nil {
@@ -146,12 +165,21 @@ func copyFile(src, dst, expectedHash string) error {
 	if hash != expectedHash {
 		panic("hash missmatch, perhaps someone else wrote to the file while the copy was happening?")
 	}
+
+	// TODO create parity bits instead
+	pathCopy := dst + ".bkup"
+	fmt.Fprintf(os.Stderr, "creating backup %s -> %s\n", dst, pathCopy)
+	err = fileutil.CopyFileContents(dst, pathCopy)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
 var errInvalidSha1 = fmt.Errorf("invalid sha1")
 
-func readExpectedSha1(path string) (string, error) {
+func readFileContainingSha1Reference(path string) (string, error) {
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -176,7 +204,7 @@ func restoreFromBkup(path, expectedSha1 string) error {
 	if err != nil {
 		return err
 	}
-	restoredSha1, err := getSha1(pathBkup)
+	restoredSha1, err := getSha1(path)
 	if err != nil {
 		return err
 	}
@@ -184,6 +212,30 @@ func restoreFromBkup(path, expectedSha1 string) error {
 		return fmt.Errorf("restore failed to produce matching sha1 expected %s vs actual %s", expectedSha1, restoredSha1)
 	}
 	fmt.Fprintf(os.Stderr, "restored %s from %s\n", path, pathBkup)
+	return nil
+}
+
+func rebuildBkup(path, expectedSha1 string) error {
+	pathBkup := path + ".bkup"
+	actualSha1, err := getSha1(path)
+	if err != nil {
+		return err
+	}
+	if actualSha1 != expectedSha1 {
+		return fmt.Errorf("original sha1 expected %s vs actual %s", expectedSha1, actualSha1)
+	}
+	err = fileutil.CopyFileContents(path, pathBkup)
+	if err != nil {
+		return err
+	}
+	restoredSha1, err := getSha1(pathBkup)
+	if err != nil {
+		return err
+	}
+	if restoredSha1 != expectedSha1 {
+		return fmt.Errorf("restore failed to produce matching sha1 expected %s vs actual %s", expectedSha1, restoredSha1)
+	}
+	fmt.Fprintf(os.Stderr, "rebuilt %s from %s\n", pathBkup, path)
 	return nil
 }
 
@@ -200,16 +252,19 @@ func buildRefIndex(refs []*refEntry) map[string]*refEntry {
 	return m
 }
 
-func readRefs(path, expectedSha1 string) ([]*refEntry, error) {
+func readRefs(path, expectedSha1 string, readOnly bool) ([]*refEntry, error) {
 	refsSha1, err := getSha1(path)
 	if err != nil {
 		return nil, err
 	}
 
 	if refsSha1 != expectedSha1 {
+		if readOnly {
+			return nil, fmt.Errorf("detected corruption in %s while reading refs: expected sha1 %s but got %s", path, expectedSha1, refsSha1)
+		}
 		err = restoreFromBkup(path, expectedSha1)
 		if err != nil {
-			return nil, fmt.Errorf("%s corrupt: expected sha1 %s vs actual %s; attempted recovery failed: %s", path, expectedSha1, refsSha1, err)
+			return nil, fmt.Errorf("detected corruption in %s while reading refs: expected sha1 %s but got %s; attempted recovery failed: %s", path, expectedSha1, refsSha1, err)
 		}
 	}
 
@@ -268,12 +323,7 @@ func (p *packImp) writeRefs(refs []*refEntry) error {
 	h.Write([]byte(data))
 	hash := fmt.Sprintf("%x", h.Sum(nil))
 
-	dataPathParts := []string{p.root, "data"}
-	dataPathParts = append(dataPathParts, splitShaToPath(hash)...)
-	dataPath := filepath.Join(dataPathParts...)
-
-	dirPath := filepath.Dir(dataPath)
-	err = os.MkdirAll(dirPath, 0700)
+	dataPath, err := getShaPath(p.root, hash, true)
 	if err != nil {
 		return err
 	}
@@ -330,9 +380,10 @@ func (p *packImp) AddFile(path string) error {
 		}
 	}
 
-	dataPathParts := []string{p.root, "data"}
-	dataPathParts = append(dataPathParts, splitShaToPath(inputHash)...)
-	dataPath := filepath.Join(dataPathParts...)
+	dataPath, err := getShaPath(p.root, inputHash, true)
+	if err != nil {
+		return err
+	}
 
 	currentBackupSha1, err := getSha1(dataPath)
 	if err != nil {
@@ -379,6 +430,113 @@ func (p *packImp) List() ([]string, error) {
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+func (p *packImp) verifyData(sha1 string) error {
+	dataPath, err := getShaPath(p.root, sha1, false)
+	if err != nil {
+		return err
+	}
+
+	actualSha1, err := getSha1(dataPath)
+	if err != nil {
+		return err
+	}
+	if actualSha1 != sha1 {
+		return fmt.Errorf("%s is corrupt; should be %s but instead is %s", dataPath, sha1, actualSha1)
+	}
+	return nil
+}
+
+func (p *packImp) verifyDataBkup(sha1 string) error {
+	dataPath, err := getShaPath(p.root, sha1, false)
+	if err != nil {
+		return err
+	}
+	dataPath += ".bkup"
+
+	actualSha1, err := getSha1(dataPath)
+	if err != nil {
+		return err
+	}
+	if actualSha1 != sha1 {
+		return fmt.Errorf("%s is corrupt; should be %s but instead is %s", dataPath, sha1, actualSha1)
+	}
+	return nil
+}
+
+// Verify verifies integrety of backup
+func (p *packImp) Verify() bool {
+	failed := false
+	for _, ref := range p.refs {
+		fmt.Fprintf(os.Stderr, "verifying %s -> %s... ", ref.path, ref.sha1)
+		err := p.verifyData(ref.sha1)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FAILED: %s\n", err)
+			failed = true
+			continue
+		}
+
+		err = p.verifyDataBkup(ref.sha1)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FAILED: %s\n", err)
+			failed = true
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "OK\n")
+	}
+	return !failed
+}
+
+// Recover attempts to recover
+func (p *packImp) Recover() (int, int, int, error) {
+	numOK := 0
+	numRecovered := 0
+	numFailed := 0
+	for _, ref := range p.refs {
+		fmt.Fprintf(os.Stderr, "verifying %s -> %s... ", ref.path, ref.sha1)
+		err := p.verifyData(ref.sha1)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FAILED: %s\n", err)
+
+			path, err := getShaPath(p.root, ref.sha1, false)
+			if err != nil {
+				return 0, 0, 0, err
+			}
+			err = restoreFromBkup(path, ref.sha1)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "RECOVERY-FAILED: %s\n", err)
+				numFailed++
+			} else {
+				numRecovered++
+				fmt.Fprintf(os.Stderr, "recovered\n")
+			}
+			continue
+		}
+
+		err = p.verifyDataBkup(ref.sha1)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FAILED: %s\n", err)
+
+			path, err := getShaPath(p.root, ref.sha1, false)
+			if err != nil {
+				return 0, 0, 0, err
+			}
+			err = rebuildBkup(path, ref.sha1)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "RECOVERY-FAILED: %s\n", err)
+				numFailed++
+			} else {
+				numRecovered++
+				fmt.Fprintf(os.Stderr, "recovered\n")
+			}
+			continue
+		}
+
+		numOK++
+		fmt.Fprintf(os.Stderr, "OK\n")
+	}
+	return numOK, numRecovered, numFailed, nil
 }
 
 func encodePath(path string) string {

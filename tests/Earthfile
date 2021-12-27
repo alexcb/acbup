@@ -42,9 +42,10 @@ test-bkup:
     # corrupt the refs metadata with 3 bogus bytes at position 10
     RUN printf '\x31\xc0\xc3' | dd of=/root/bkup/data/be/e0/7a/bee07a7f6a5e8ae619273e1a143562cbb5468d7c bs=1 seek=10 count=3 conv=notrunc
 
-    # TODO implement these
-    # RUN echo acbup --config=acbup.conf --verify
-    # RUN echo acbup --config=acbup.conf --recover
+    RUN set -o pipefail && ((acbup --config=acbup.conf --verify 2>&1 | tee output.txt) || (touch /failed)) && rm /failed
+    RUN cat output.txt | grep 'detected corruption in /root/bkup/data/be/e0/7a/bee07a7f6a5e8ae619273e1a143562cbb5468d7c while reading refs'
+    RUN acbup --config=acbup.conf --recover
+    # TODO fix the output of --recover to include the ref under numRecovered; currently it will recover a corrupted refs, but it doesn't report it was recovered
 
     # should still work
     RUN set -o pipefail && acbup --config=acbup.conf --list | tee output.txt
@@ -64,15 +65,18 @@ test-bkup:
 
     # next corrupt the backed up file
     RUN echo "extra-data" >> /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130
-    RUN echo TODO: implement a --verify / --recover mode. Currently we just re-upload the existing local file.
-    RUN set -o pipefail && acbup --config=acbup.conf | tee output.txt
+
+    RUN set -o pipefail && ((acbup --config=acbup.conf --verify 2>&1 | tee output.txt) || (touch /failed)) && rm /failed
+    RUN cat output.txt | grep '/root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130 is corrupt'
+    RUN acbup --config=acbup.conf --recover
     RUN test "$(cat /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130 | sha1sum - | awk '{print $1}')" = "d046cd9b7ffb7661e449683313d41f6fc33e3130"
 
     # next corrupt the backed up file's bkup
-    # RUN echo "bad-data" >> /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup
-    # RUN echo TODO: implement a --verify / --recover mode. Currently we just re-upload the existing local file.
-    # RUN set -o pipefail && acbup --config=acbup.conf | tee output.txt
-    # RUN test "$(cat /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup | sha1sum - | awk '{print $1}')" = "d046cd9b7ffb7661e449683313d41f6fc33e3130"
+    RUN echo "bad-data" >> /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup
+    RUN set -o pipefail && ((acbup --config=acbup.conf --verify 2>&1 | tee output.txt) || (touch /failed)) && rm /failed
+    RUN cat output.txt | grep '/root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup is corrupt'
+    RUN acbup --config=acbup.conf --recover
+    RUN test "$(cat /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup | sha1sum - | awk '{print $1}')" = "d046cd9b7ffb7661e449683313d41f6fc33e3130"
 
     # next change the local copy to test acbup detects the change and prompts the user on what to do.
     RUN echo "aleph" > /root/files/a.txt

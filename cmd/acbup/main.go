@@ -12,9 +12,11 @@ import (
 )
 
 type flags struct {
-	List   bool   `short:"l" long:"list" description:"list contents of backup"`
-	Config string `short:"c" long:"config" description:"config file"`
-	Help   bool   `short:"h" long:"help" description:"display this help"`
+	Recover bool   `long:"recover" description:"attempt to fix corrupted data"`
+	Verify  bool   `long:"verify" description:"verify backup integrity"`
+	List    bool   `short:"l" long:"list" description:"list contents of backup"`
+	Config  string `short:"c" long:"config" description:"config file"`
+	Help    bool   `short:"h" long:"help" description:"display this help"`
 }
 
 func die(msg string, args ...interface{}) {
@@ -93,9 +95,38 @@ func main() {
 		die("unhandled args: %v", args)
 	}
 
-	p, err := pack.New(dst)
+	if flags.Verify {
+		p, err := pack.New(dst, true)
+		if err != nil {
+			die("failed to create new Pack: %s\n", err)
+		}
+
+		ok := p.Verify()
+		if !ok {
+			die("verification of %s failed\n", dst)
+		}
+		fmt.Printf("verification of %s passed\n", dst)
+		return
+	}
+
+	p, err := pack.New(dst, false)
 	if err != nil {
 		die("failed to create new Pack: %s\n", err)
+	}
+
+	if flags.Recover {
+		// TODO recovery mode should only perform recovery under p.Recover() and never under pack.New()
+		// in fact we should move this logic into a function (rather than method): pack.Recover(dst)
+		numOK, numRecovered, numFailed, err := p.Recover()
+		if err != nil {
+			die("recovery of %s failed: %s\n", dst, err)
+		}
+		if numFailed > 0 {
+			die("recovery of %s failed to recover %d file(s) (%d file(s) were recovered, %d file(s) were OK)\n", dst, numFailed, numRecovered, numOK)
+		}
+
+		fmt.Printf("recovery of %s passed: %d corrupt file(s) were recovered (%d file(s) were OK)\n", dst, numRecovered, numOK)
+		return
 	}
 
 	if flags.List {

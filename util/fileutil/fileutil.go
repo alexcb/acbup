@@ -14,6 +14,8 @@ func FileExists(filename string) bool {
 	return !info.IsDir()
 }
 
+// CopyFileContents copies THE CONTENTS of a file from src to dst
+// it does not maintain file permissions or ownership
 func CopyFileContents(src, dst string) error {
 	srcFile, err := os.Open(src)
 	if err != nil {
