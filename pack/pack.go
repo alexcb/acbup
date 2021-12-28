@@ -20,13 +20,13 @@ import (
 
 // Pack defines the pack interface
 type Pack interface {
-	AddDir(string) error
-	AddFile(string) error
+	AddDir(string, string) error
+	AddFile(string, string) error
 	Close() error
 	List() ([]string, error)
 	Verify() bool
 	Recover() (int, int, int, error)
-	Restore(string) error
+	Restore(string, string) error
 }
 
 type packImp struct {
@@ -371,15 +371,22 @@ func (p *packImp) writeRefs(refs []*refEntry) error {
 }
 
 // AddFile adds a file to the pack
-func (p *packImp) AddFile(path string) error {
+func (p *packImp) AddFile(path, alias string) error {
 	inputHash, err := getSha1(path)
 	if err != nil {
 		return err
 	}
 
-	if ref, ok := p.refIndex[path]; ok {
+	var pathAndAlias string
+	if path == alias {
+		pathAndAlias = path
+	} else {
+		pathAndAlias = fmt.Sprintf("%s (%s)", path, alias)
+	}
+
+	if ref, ok := p.refIndex[alias]; ok {
 		if ref.sha1 != inputHash {
-			fmt.Fprintf(os.Stderr, "ERROR: local copy of %s has been changed since backup; curent hash %s vs backed up %s\n", path, inputHash, ref.sha1)
+			fmt.Fprintf(os.Stderr, "ERROR: local copy of %s has been changed since backup; curent hash %s vs backed up %s\n", pathAndAlias, inputHash, ref.sha1)
 			if !p.interactive {
 				return fmt.Errorf("unable to save/skip changed file in non-interactive mode")
 			}
@@ -401,36 +408,47 @@ func (p *packImp) AddFile(path string) error {
 	currentBackupSha1, err := getSha1(dataPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "%q -> %q; %s backing up\n", path, inputHash, dataPath)
+			fmt.Fprintf(os.Stderr, "%q -> %q; %s backing up\n", pathAndAlias, inputHash, dataPath)
 			err = copyFile(path, dataPath, inputHash)
 			if err != nil {
 				return err
 			}
-			return p.addMeta(path, inputHash)
+			return p.addMeta(alias, inputHash)
 		}
 		return err
 	}
 	if inputHash != currentBackupSha1 {
 		// the backed up copy must be corrupt, if not then it would have been stored under a different path
-		fmt.Fprintf(os.Stderr, "ERROR WARNING CORRUPT DATA FOUND!!!! re-backing up data %q -> %q; %s\n", path, inputHash, dataPath)
+		fmt.Fprintf(os.Stderr, "ERROR WARNING CORRUPT DATA FOUND!!!! re-backing up data %q -> %q; %s\n", pathAndAlias, inputHash, dataPath)
 		return copyFile(path, dataPath, inputHash)
 	}
 
-	fmt.Fprintf(os.Stderr, "%q -> %q; %s already backedup (and verified)\n", path, inputHash, dataPath)
-	return p.addMeta(path, inputHash)
+	// TODO why is there another call to addMeta? perhaps for a last-seen timestamp?
+	fmt.Fprintf(os.Stderr, "%q -> %q; %s already backedup (and verified)\n", pathAndAlias, inputHash, dataPath)
+	return p.addMeta(alias, inputHash)
 }
 
 // AddDir adds a dir to the pack
-func (p *packImp) AddDir(path string) error {
+func (p *packImp) AddDir(path, alias string) error {
+	if alias != path {
+		if !strings.HasPrefix(path, "/") {
+			return fmt.Errorf("path must start with /")
+		}
+		if !strings.HasPrefix(alias, "/") {
+			return fmt.Errorf("alias must start with /")
+		}
+	}
+	n := len(path)
 	err := filepath.Walk(path,
-		func(path string, info os.FileInfo, err error) error {
+		func(walkPath string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
 			if info.IsDir() {
 				return nil
 			}
-			return p.AddFile(path)
+			walkAlias := alias + walkPath[n:]
+			return p.AddFile(walkPath, walkAlias)
 		})
 	return err
 }
@@ -553,18 +571,10 @@ func (p *packImp) Recover() (int, int, int, error) {
 }
 
 // Restore overwrites the local file with the backed up file
-func (p *packImp) Restore(localPath string) error {
-	absPath, err := filepath.Abs(localPath)
-	if err != nil {
-		return err
-	}
-	if !strings.HasPrefix(absPath, "/") {
-		panic("bad path")
-	}
-
-	ref, ok := p.refIndex[localPath]
+func (p *packImp) Restore(aliasPath, localPath string) error {
+	ref, ok := p.refIndex[aliasPath]
 	if !ok {
-		return fmt.Errorf("%s not in backup", absPath)
+		return fmt.Errorf("%s not in backup", aliasPath)
 	}
 
 	bkupPath, err := getShaPath(p.root, ref.sha1, false)
@@ -578,6 +588,11 @@ func (p *packImp) Restore(localPath string) error {
 	}
 	if ref.sha1 != actualSha1 {
 		return fmt.Errorf("bkup %s is corrupt; expected %s but actual hash is %s", bkupPath, ref.sha1, actualSha1)
+	}
+
+	err = os.MkdirAll(filepath.Dir(localPath), 0700)
+	if err != nil {
+		return err
 	}
 
 	return fileutil.CopyFileContents(bkupPath, localPath)

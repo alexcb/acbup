@@ -26,14 +26,15 @@ func die(msg string, args ...interface{}) {
 	os.Exit(1)
 }
 
-func readConfig(path string) (string, string, error) {
+func readConfig(path string) (string, string, string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	defer file.Close()
 
 	var src string
+	var alias string
 	var dst string
 
 	scanner := bufio.NewScanner(file)
@@ -45,7 +46,7 @@ func readConfig(path string) (string, string, error) {
 		}
 		fields := strings.SplitN(line, "=", 2)
 		if len(fields) < 2 {
-			return "", "", fmt.Errorf("bad config line: %q", line)
+			return "", "", "", fmt.Errorf("bad config line: %q", line)
 		}
 		key := strings.TrimSpace(fields[0])
 		val := strings.TrimSpace(fields[1])
@@ -53,20 +54,38 @@ func readConfig(path string) (string, string, error) {
 		switch key {
 		case "src":
 			src = val
+		case "alias":
+			alias = val
 		case "dst":
 			dst = val
 		default:
-			return "", "", fmt.Errorf("unsupported key: %q", key)
+			return "", "", "", fmt.Errorf("unsupported key: %q", key)
 		}
 
 	}
 	if src == "" {
-		return "", "", fmt.Errorf("src not defined")
+		return "", "", "", fmt.Errorf("src not defined")
 	}
 	if dst == "" {
-		return "", "", fmt.Errorf("dst not defined")
+		return "", "", "", fmt.Errorf("dst not defined")
 	}
-	return src, dst, nil
+	if alias == "" {
+		alias = src
+	} else {
+		if !strings.HasPrefix(alias, "/") {
+			return "", "", "", fmt.Errorf("alias must start with /")
+		}
+		if !strings.HasSuffix(alias, "/") {
+			return "", "", "", fmt.Errorf("alias must end with /")
+		}
+		if !strings.HasPrefix(src, "/") {
+			return "", "", "", fmt.Errorf("src must start with / when alias is set")
+		}
+		if !strings.HasSuffix(src, "/") {
+			return "", "", "", fmt.Errorf("src must end with / when alias is set")
+		}
+	}
+	return src, alias, dst, nil
 }
 
 func main() {
@@ -92,7 +111,7 @@ func main() {
 		die("no config file was given\n")
 	}
 
-	src, dst, err := readConfig(flags.Config)
+	src, alias, dst, err := readConfig(flags.Config)
 	if err != nil {
 		die("failed to read config %s: %s\n", flags.Config, err)
 	}
@@ -127,7 +146,15 @@ func main() {
 			die("restore takes one or more local filepaths to restore")
 		}
 		for _, path := range args {
-			err := p.Restore(path)
+			var aliasPath string
+			if strings.HasPrefix(path, src) {
+				aliasPath = alias + path[len(src):]
+			} else if strings.HasPrefix(path, alias) {
+				aliasPath = path
+				path = src + path[len(alias):]
+			}
+
+			err := p.Restore(aliasPath, path)
 			if err != nil {
 				die("restore-local-file-from-backup of %s failed: %s\n", path, err)
 			}
@@ -166,7 +193,7 @@ func main() {
 		return
 	}
 
-	err = p.AddDir(src)
+	err = p.AddDir(src, alias)
 	if err != nil {
 		die("failed to add dir %s: %s\n", src, err)
 	}

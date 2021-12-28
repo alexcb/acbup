@@ -94,3 +94,41 @@ test-bkup:
     # test /root/files/a.txt was restored correctly
     RUN find /root/files/ -type f | sort | xargs md5sum > /root/files.md5.after
     RUN diff /root/files.md5.before /root/files.md5.after
+
+test-bkup-alias:
+    FROM alpine
+    COPY ..+acbup/acbup /bin/.
+    RUN echo "src=/root/files/" > acbup.conf && \
+        echo "alias=/testfiles/" >> acbup.conf && \
+        echo "dst=/root/bkup" >> acbup.conf
+
+    RUN mkdir /root/files
+    RUN echo "one" > /root/files/1
+    RUN echo "two" > /root/files/2
+
+    RUN mkdir -p /root/files/sub/dir
+    RUN echo "three" > /root/files/sub/dir/3.txt
+
+    RUN find /root/files/ -type f | sort | xargs md5sum > /root/files.md5.before
+
+    RUN acbup --config=acbup.conf
+    RUN acbup --config=acbup.conf --list | tee output.txt
+    RUN test "$(head -n 1 output.txt)" = "/testfiles/1"
+    RUN test "$(head -n 2 output.txt | tail -n 1)" = "/testfiles/2"
+    RUN test "$(tail -n 1 output.txt)" = "/testfiles/sub/dir/3.txt"
+
+    RUN rm -rf /root/files
+    RUN mkdir -p /root/some/other/location
+    RUN echo "src=/root/some/other/location/" > acbup.conf && \
+        echo "alias=/testfiles/" >> acbup.conf && \
+        echo "dst=/root/bkup" >> acbup.conf
+
+    RUN acbup --config=acbup.conf
+    RUN acbup --config=acbup.conf --list | tee output.txt
+    RUN test "$(head -n 1 output.txt)" = "/testfiles/1"
+    RUN test "$(head -n 2 output.txt | tail -n 1)" = "/testfiles/2"
+    RUN test "$(tail -n 1 output.txt)" = "/testfiles/sub/dir/3.txt"
+
+    RUN acbup --config=acbup.conf --restore-local-file-from-backup /testfiles/sub/dir/3.txt
+    RUN ! test -f /testfiles/sub/dir/3.txt # TODO this should have been written to /root/some/other/location/sub/dir/3.txt instead
+    RUN test "$(cat /root/some/other/location/sub/dir/3.txt)" = "three"
