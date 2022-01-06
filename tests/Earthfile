@@ -30,9 +30,9 @@ test-bkup:
     # bee07a7f6a5e8ae619273e1a143562cbb5468d7c is the contents of the ref entry for the above test /root/files/...
     # if those filenames change, then this hash will need to be updated
     RUN test "$(cat /root/bkup/refs)" = "bee07a7f6a5e8ae619273e1a143562cbb5468d7c"
-    RUN ls /root/bkup/data/be/e0/7a/bee07a7f6a5e8ae619273e1a143562cbb5468d7c
-    RUN ls /root/bkup/data/be/e0/7a/bee07a7f6a5e8ae619273e1a143562cbb5468d7c.bkup
-    RUN test "$(cat /root/bkup/data/be/e0/7a/bee07a7f6a5e8ae619273e1a143562cbb5468d7c | sha1sum - | awk '{print $1}')" = "bee07a7f6a5e8ae619273e1a143562cbb5468d7c"
+    RUN ls /root/bkup/data/be/e0/bee07a7f6a5e8ae619273e1a143562cbb5468d7c
+    RUN ls /root/bkup/data/be/e0/bee07a7f6a5e8ae619273e1a143562cbb5468d7c.bkup
+    RUN test "$(cat /root/bkup/data/be/e0/bee07a7f6a5e8ae619273e1a143562cbb5468d7c | sha1sum - | awk '{print $1}')" = "bee07a7f6a5e8ae619273e1a143562cbb5468d7c"
 
     RUN acbup --config=acbup.conf
     RUN set -o pipefail && acbup --config=acbup.conf --list | tee output.txt
@@ -43,10 +43,10 @@ test-bkup:
     RUN test "$(tail -n 1 output.txt)" = "/root/files/sub/dir/e.txt"
 
     # corrupt the refs metadata with 3 bogus bytes at position 10
-    RUN printf '\x31\xc0\xc3' | dd of=/root/bkup/data/be/e0/7a/bee07a7f6a5e8ae619273e1a143562cbb5468d7c bs=1 seek=10 count=3 conv=notrunc
+    RUN printf '\x31\xc0\xc3' | dd of=/root/bkup/data/be/e0/bee07a7f6a5e8ae619273e1a143562cbb5468d7c bs=1 seek=10 count=3 conv=notrunc
 
     RUN set -o pipefail && ((acbup --config=acbup.conf --verify 2>&1 | tee output.txt) || (touch /failed)) && rm /failed
-    RUN cat output.txt | grep 'detected corruption in /root/bkup/data/be/e0/7a/bee07a7f6a5e8ae619273e1a143562cbb5468d7c while reading refs'
+    RUN cat output.txt | grep 'detected corruption in /root/bkup/data/be/e0/bee07a7f6a5e8ae619273e1a143562cbb5468d7c while reading refs'
     RUN acbup --config=acbup.conf --recover
     # TODO fix the output of --recover to include the ref under numRecovered; currently it will recover a corrupted refs, but it doesn't report it was recovered
 
@@ -62,24 +62,24 @@ test-bkup:
     RUN test "$(cat /root/bkup/refs)" = "bee07a7f6a5e8ae619273e1a143562cbb5468d7c"
 
     # mess with bkup and test it gets restored
-    RUN printf '\x31\xc0\xc3' | dd of=/root/bkup/data/be/e0/7a/bee07a7f6a5e8ae619273e1a143562cbb5468d7c.bkup bs=1 seek=10 count=3 conv=notrunc
+    RUN printf '\x31\xc0\xc3' | dd of=/root/bkup/data/be/e0/bee07a7f6a5e8ae619273e1a143562cbb5468d7c.bkup bs=1 seek=10 count=3 conv=notrunc
     RUN acbup --config=acbup.conf
-    RUN diff -q /root/bkup/data/be/e0/7a/bee07a7f6a5e8ae619273e1a143562cbb5468d7c /root/bkup/data/be/e0/7a/bee07a7f6a5e8ae619273e1a143562cbb5468d7c.bkup
+    RUN diff -q /root/bkup/data/be/e0/bee07a7f6a5e8ae619273e1a143562cbb5468d7c /root/bkup/data/be/e0/bee07a7f6a5e8ae619273e1a143562cbb5468d7c.bkup
 
     # next corrupt the backed up file
-    RUN echo "extra-data" >> /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130
+    RUN echo "extra-data" >> /root/bkup/data/d0/46/d046cd9b7ffb7661e449683313d41f6fc33e3130
 
     RUN set -o pipefail && ((acbup --config=acbup.conf --verify 2>&1 | tee output.txt) || (touch /failed)) && rm /failed
-    RUN cat output.txt | grep '/root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130 is corrupt'
+    RUN cat output.txt | grep '/root/bkup/data/d0/46/d046cd9b7ffb7661e449683313d41f6fc33e3130 is corrupt'
     RUN acbup --config=acbup.conf --recover
-    RUN test "$(cat /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130 | sha1sum - | awk '{print $1}')" = "d046cd9b7ffb7661e449683313d41f6fc33e3130"
+    RUN test "$(cat /root/bkup/data/d0/46/d046cd9b7ffb7661e449683313d41f6fc33e3130 | sha1sum - | awk '{print $1}')" = "d046cd9b7ffb7661e449683313d41f6fc33e3130"
 
     # next corrupt the backed up file's bkup
-    RUN echo "bad-data" >> /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup
+    RUN echo "bad-data" >> /root/bkup/data/d0/46/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup
     RUN set -o pipefail && ((acbup --config=acbup.conf --verify 2>&1 | tee output.txt) || (touch /failed)) && rm /failed
-    RUN cat output.txt | grep '/root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup is corrupt'
+    RUN cat output.txt | grep '/root/bkup/data/d0/46/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup is corrupt'
     RUN acbup --config=acbup.conf --recover
-    RUN test "$(cat /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup | sha1sum - | awk '{print $1}')" = "d046cd9b7ffb7661e449683313d41f6fc33e3130"
+    RUN test "$(cat /root/bkup/data/d0/46/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup | sha1sum - | awk '{print $1}')" = "d046cd9b7ffb7661e449683313d41f6fc33e3130"
 
     # finally make sure original local files were never changed
     RUN find /root/files/ -type f | sort | xargs md5sum > /root/files.md5.after
@@ -151,16 +151,16 @@ test-disabled-parity:
 
     RUN acbup --config=acbup.conf
 
-    RUN ls /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130
-    RUN ! ls /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup
+    RUN ls /root/bkup/data/d0/46/d046cd9b7ffb7661e449683313d41f6fc33e3130
+    RUN ! ls /root/bkup/data/d0/46/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup
 
     # corrupt the data
-    RUN printf '\x31\xc0\xc3' | dd of=/root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130 bs=1 seek=10 count=3 conv=notrunc
+    RUN printf '\x31\xc0\xc3' | dd of=/root/bkup/data/d0/46/d046cd9b7ffb7661e449683313d41f6fc33e3130 bs=1 seek=10 count=3 conv=notrunc
 
     RUN acbup --config=acbup.conf 2>&1 | tee output.txt
     RUN cat output.txt | grep 'ERROR WARNING CORRUPT DATA FOUND'
 
-    RUN diff /root/files/a.txt /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130
+    RUN diff /root/files/a.txt /root/bkup/data/d0/46/d046cd9b7ffb7661e449683313d41f6fc33e3130
 
     # change source data
     RUN echo "apple" > /root/files/a.txt
@@ -169,5 +169,5 @@ test-disabled-parity:
     RUN acbup --config=acbup.conf 2>&1 | tee output.txt
     RUN cat output.txt | grep 'local copy of /root/files/a.txt has been changed since backup'
     # test backuped copy still exists
-    RUN ls /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130
-    RUN test "$(cat /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130 | sha1sum | awk '{print $1}')" = "d046cd9b7ffb7661e449683313d41f6fc33e3130"
+    RUN ls /root/bkup/data/d0/46/d046cd9b7ffb7661e449683313d41f6fc33e3130
+    RUN test "$(cat /root/bkup/data/d0/46/d046cd9b7ffb7661e449683313d41f6fc33e3130 | sha1sum | awk '{print $1}')" = "d046cd9b7ffb7661e449683313d41f6fc33e3130"
