@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/alexcb/acbup/pack"
@@ -26,16 +27,24 @@ func die(msg string, args ...interface{}) {
 	os.Exit(1)
 }
 
-func readConfig(path string) (string, string, string, error) {
+type config struct {
+	src   string
+	alias string
+	dst   string
+	par   int
+}
+
+func readConfig(path string) (*config, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", "", "", err
+		return nil, err
 	}
 	defer file.Close()
 
 	var src string
 	var alias string
 	var dst string
+	par := 2
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -46,7 +55,7 @@ func readConfig(path string) (string, string, string, error) {
 		}
 		fields := strings.SplitN(line, "=", 2)
 		if len(fields) < 2 {
-			return "", "", "", fmt.Errorf("bad config line: %q", line)
+			return nil, fmt.Errorf("bad config line: %q", line)
 		}
 		key := strings.TrimSpace(fields[0])
 		val := strings.TrimSpace(fields[1])
@@ -58,34 +67,46 @@ func readConfig(path string) (string, string, string, error) {
 			alias = val
 		case "dst":
 			dst = val
+		case "par":
+			par, err = strconv.Atoi(val)
+			if err != nil {
+				return nil, err
+			}
+
 		default:
-			return "", "", "", fmt.Errorf("unsupported key: %q", key)
+			return nil, fmt.Errorf("unsupported key: %q", key)
 		}
 
 	}
 	if src == "" {
-		return "", "", "", fmt.Errorf("src not defined")
+		return nil, fmt.Errorf("src not defined")
 	}
 	if dst == "" {
-		return "", "", "", fmt.Errorf("dst not defined")
+		return nil, fmt.Errorf("dst not defined")
 	}
 	if alias == "" {
 		alias = src
 	} else {
 		if !strings.HasPrefix(alias, "/") {
-			return "", "", "", fmt.Errorf("alias must start with /")
+			return nil, fmt.Errorf("alias must start with /")
 		}
 		if !strings.HasSuffix(alias, "/") {
-			return "", "", "", fmt.Errorf("alias must end with /")
+			return nil, fmt.Errorf("alias must end with /")
 		}
 		if !strings.HasPrefix(src, "/") {
-			return "", "", "", fmt.Errorf("src must start with / when alias is set")
+			return nil, fmt.Errorf("src must start with / when alias is set")
 		}
 		if !strings.HasSuffix(src, "/") {
-			return "", "", "", fmt.Errorf("src must end with / when alias is set")
+			return nil, fmt.Errorf("src must end with / when alias is set")
 		}
 	}
-	return src, alias, dst, nil
+	cfg := &config{
+		src:   src,
+		dst:   dst,
+		alias: alias,
+		par:   par,
+	}
+	return cfg, nil
 }
 
 func main() {
@@ -111,7 +132,7 @@ func main() {
 		die("no config file was given\n")
 	}
 
-	src, alias, dst, err := readConfig(flags.Config)
+	cfg, err := readConfig(flags.Config)
 	if err != nil {
 		die("failed to read config %s: %s\n", flags.Config, err)
 	}
@@ -123,20 +144,20 @@ func main() {
 			die("unhandled args: %v", args)
 		}
 
-		p, err := pack.New(dst, true, interactive)
+		p, err := pack.New(cfg.dst, true, interactive, cfg.par)
 		if err != nil {
 			die("failed to create new Pack: %s\n", err)
 		}
 
 		ok := p.Verify()
 		if !ok {
-			die("verification of %s failed\n", dst)
+			die("verification of %s failed\n", cfg.dst)
 		}
-		fmt.Printf("verification of %s passed\n", dst)
+		fmt.Printf("verification of %s passed\n", cfg.dst)
 		return
 	}
 
-	p, err := pack.New(dst, false, interactive)
+	p, err := pack.New(cfg.dst, false, interactive, cfg.par)
 	if err != nil {
 		die("failed to create new Pack: %s\n", err)
 	}
@@ -147,11 +168,11 @@ func main() {
 		}
 		for _, path := range args {
 			var aliasPath string
-			if strings.HasPrefix(path, src) {
-				aliasPath = alias + path[len(src):]
-			} else if strings.HasPrefix(path, alias) {
+			if strings.HasPrefix(path, cfg.src) {
+				aliasPath = cfg.alias + path[len(cfg.src):]
+			} else if strings.HasPrefix(path, cfg.alias) {
 				aliasPath = path
-				path = src + path[len(alias):]
+				path = cfg.src + path[len(cfg.alias):]
 			}
 
 			err := p.Restore(aliasPath, path)
@@ -172,20 +193,20 @@ func main() {
 		// in fact we should move this logic into a function (rather than method): pack.Recover(dst)
 		numOK, numRecovered, numFailed, err := p.Recover()
 		if err != nil {
-			die("recovery of %s failed: %s\n", dst, err)
+			die("recovery of %s failed: %s\n", cfg.dst, err)
 		}
 		if numFailed > 0 {
-			die("recovery of %s failed to recover %d file(s) (%d file(s) were recovered, %d file(s) were OK)\n", dst, numFailed, numRecovered, numOK)
+			die("recovery of %s failed to recover %d file(s) (%d file(s) were recovered, %d file(s) were OK)\n", cfg.dst, numFailed, numRecovered, numOK)
 		}
 
-		fmt.Printf("recovery of %s passed: %d corrupt file(s) were recovered (%d file(s) were OK)\n", dst, numRecovered, numOK)
+		fmt.Printf("recovery of %s passed: %d corrupt file(s) were recovered (%d file(s) were OK)\n", cfg.dst, numRecovered, numOK)
 		return
 	}
 
 	if flags.List {
 		files, err := p.List()
 		if err != nil {
-			die("failed to list contents of backup %s: %s\n", dst, err)
+			die("failed to list contents of backup %s: %s\n", cfg.dst, err)
 		}
 		for _, f := range files {
 			fmt.Println(f)
@@ -193,14 +214,14 @@ func main() {
 		return
 	}
 
-	err = p.AddDir(src, alias)
+	err = p.AddDir(cfg.src, cfg.alias)
 	if err != nil {
-		die("failed to add dir %s: %s\n", src, err)
+		die("failed to add dir %s: %s\n", cfg.src, err)
 	}
 	fmt.Printf("done\n")
 
 	err = p.Close()
 	if err != nil {
-		die("failed to close pack %s: %s\n", dst, err)
+		die("failed to close pack %s: %s\n", cfg.dst, err)
 	}
 }

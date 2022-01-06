@@ -35,12 +35,20 @@ type packImp struct {
 	refIndex    map[string]*refEntry
 	readOnly    bool
 	interactive bool
+	parityBits  int
 }
 
+var errInvalidParityBitsConfig = fmt.Errorf("invalid parity bits config")
+
 // New returns a new Pack
-func New(packRoot string, readOnly, interactive bool) (Pack, error) {
+func New(packRoot string, readOnly, interactive bool, parityBits int) (Pack, error) {
 	var refs []*refEntry
 	refIndex := map[string]*refEntry{}
+
+	if parityBits < 0 || parityBits > 1 {
+		fmt.Printf("got %d\n", parityBits)
+		return nil, errInvalidParityBitsConfig
+	}
 
 	refsPath := filepath.Join(packRoot, "refs")
 	if fileutil.FileExists(refsPath) {
@@ -68,6 +76,7 @@ func New(packRoot string, readOnly, interactive bool) (Pack, error) {
 		refs:        refs,
 		readOnly:    readOnly,
 		interactive: interactive,
+		parityBits:  parityBits,
 	}
 
 	return p, nil
@@ -137,7 +146,7 @@ func getSha1(path string) (string, error) {
 	return hash, nil
 }
 
-func copyFile(src, dst, expectedHash string) error {
+func copyFile(src, dst, expectedHash string, parityBits int) error {
 	const bufferSize = 1024 * 1024 * 16
 	srcFile, err := os.Open(src)
 	if err != nil {
@@ -171,11 +180,13 @@ func copyFile(src, dst, expectedHash string) error {
 	}
 
 	// TODO create parity bits instead
-	pathCopy := dst + ".bkup"
-	fmt.Fprintf(os.Stderr, "creating backup %s -> %s\n", dst, pathCopy)
-	err = fileutil.CopyFileContents(dst, pathCopy)
-	if err != nil {
-		return err
+	if parityBits == 1 {
+		pathCopy := dst + ".bkup"
+		fmt.Fprintf(os.Stderr, "creating backup %s -> %s\n", dst, pathCopy)
+		err = fileutil.CopyFileContents(dst, pathCopy)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -349,11 +360,13 @@ func (p *packImp) writeRefs(refs []*refEntry) error {
 	}
 
 	// TODO create parity bits instead
-	pathCopy := dataPath + ".bkup"
-	fmt.Fprintf(os.Stderr, "creating backup %s -> %s\n", dataPath, pathCopy)
-	err = fileutil.CopyFileContents(dataPath, pathCopy)
-	if err != nil {
-		return err
+	if p.parityBits == 1 {
+		pathCopy := dataPath + ".bkup"
+		fmt.Fprintf(os.Stderr, "creating backup %s -> %s\n", dataPath, pathCopy)
+		err = fileutil.CopyFileContents(dataPath, pathCopy)
+		if err != nil {
+			return err
+		}
 	}
 
 	refsPath := filepath.Join(p.root, "refs")
@@ -409,7 +422,7 @@ func (p *packImp) AddFile(path, alias string) error {
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintf(os.Stderr, "%q -> %q; %s backing up\n", pathAndAlias, inputHash, dataPath)
-			err = copyFile(path, dataPath, inputHash)
+			err = copyFile(path, dataPath, inputHash, p.parityBits)
 			if err != nil {
 				return err
 			}
@@ -420,7 +433,7 @@ func (p *packImp) AddFile(path, alias string) error {
 	if inputHash != currentBackupSha1 {
 		// the backed up copy must be corrupt, if not then it would have been stored under a different path
 		fmt.Fprintf(os.Stderr, "ERROR WARNING CORRUPT DATA FOUND!!!! re-backing up data %q -> %q; %s\n", pathAndAlias, inputHash, dataPath)
-		return copyFile(path, dataPath, inputHash)
+		return copyFile(path, dataPath, inputHash, p.parityBits)
 	}
 
 	// TODO why is there another call to addMeta? perhaps for a last-seen timestamp?
@@ -508,11 +521,13 @@ func (p *packImp) Verify() bool {
 			continue
 		}
 
-		err = p.verifyDataBkup(ref.sha1)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "FAILED: %s\n", err)
-			failed = true
-			continue
+		if p.parityBits > 0 {
+			err = p.verifyDataBkup(ref.sha1)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "FAILED: %s\n", err)
+				failed = true
+				continue
+			}
 		}
 		fmt.Fprintf(os.Stderr, "OK\n")
 	}
@@ -545,23 +560,25 @@ func (p *packImp) Recover() (int, int, int, error) {
 			continue
 		}
 
-		err = p.verifyDataBkup(ref.sha1)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "FAILED: %s\n", err)
+		if p.parityBits > 0 {
+			err = p.verifyDataBkup(ref.sha1)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "FAILED: %s\n", err)
 
-			path, err := getShaPath(p.root, ref.sha1, false)
-			if err != nil {
-				return 0, 0, 0, err
+				path, err := getShaPath(p.root, ref.sha1, false)
+				if err != nil {
+					return 0, 0, 0, err
+				}
+				err = rebuildBkup(path, ref.sha1)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "RECOVERY-FAILED: %s\n", err)
+					numFailed++
+				} else {
+					numRecovered++
+					fmt.Fprintf(os.Stderr, "recovered\n")
+				}
+				continue
 			}
-			err = rebuildBkup(path, ref.sha1)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "RECOVERY-FAILED: %s\n", err)
-				numFailed++
-			} else {
-				numRecovered++
-				fmt.Fprintf(os.Stderr, "recovered\n")
-			}
-			continue
 		}
 
 		numOK++

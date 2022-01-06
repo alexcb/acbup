@@ -11,7 +11,8 @@ test-bkup:
     FROM alpine
     COPY ..+acbup/acbup /bin/.
     RUN echo "src=/root/files" > acbup.conf && \
-        echo "dst=/root/bkup" >> acbup.conf
+        echo "dst=/root/bkup" >> acbup.conf && \
+        echo "par=1" >> acbup.conf
 
     RUN mkdir /root/files
     RUN echo "alpha" > /root/files/a.txt
@@ -100,7 +101,8 @@ test-bkup-alias:
     COPY ..+acbup/acbup /bin/.
     RUN echo "src=/root/files/" > acbup.conf && \
         echo "alias=/testfiles/" >> acbup.conf && \
-        echo "dst=/root/bkup" >> acbup.conf
+        echo "dst=/root/bkup" >> acbup.conf && \
+        echo "par=1" >> acbup.conf
 
     RUN mkdir /root/files
     RUN echo "one" > /root/files/1
@@ -121,7 +123,8 @@ test-bkup-alias:
     RUN mkdir -p /root/some/other/location
     RUN echo "src=/root/some/other/location/" > acbup.conf && \
         echo "alias=/testfiles/" >> acbup.conf && \
-        echo "dst=/root/bkup" >> acbup.conf
+        echo "dst=/root/bkup" >> acbup.conf && \
+        echo "par=1" >> acbup.conf
 
     RUN acbup --config=acbup.conf
     RUN acbup --config=acbup.conf --list | tee output.txt
@@ -132,3 +135,39 @@ test-bkup-alias:
     RUN acbup --config=acbup.conf --restore-local-file-from-backup /testfiles/sub/dir/3.txt
     RUN ! test -f /testfiles/sub/dir/3.txt # TODO this should have been written to /root/some/other/location/sub/dir/3.txt instead
     RUN test "$(cat /root/some/other/location/sub/dir/3.txt)" = "three"
+
+test-disabled-parity:
+    FROM alpine
+    COPY ..+acbup/acbup /bin/.
+    RUN echo "src=/root/files" > acbup.conf && \
+        echo "dst=/root/bkup" >> acbup.conf && \
+        echo "par=0" >> acbup.conf
+
+    RUN mkdir /root/files
+    RUN echo "alpha" > /root/files/a.txt
+    RUN test "$(cat /root/files/a.txt | sha1sum | awk '{print $1}')" = "d046cd9b7ffb7661e449683313d41f6fc33e3130"
+
+    RUN find /root/files/ -type f | sort | xargs md5sum > /root/files.md5.before
+
+    RUN acbup --config=acbup.conf
+
+    RUN ls /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130
+    RUN ! ls /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130.bkup
+
+    # corrupt the data
+    RUN printf '\x31\xc0\xc3' | dd of=/root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130 bs=1 seek=10 count=3 conv=notrunc
+
+    RUN acbup --config=acbup.conf 2>&1 | tee output.txt
+    RUN cat output.txt | grep 'ERROR WARNING CORRUPT DATA FOUND'
+
+    RUN diff /root/files/a.txt /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130
+
+    # change source data
+    RUN echo "apple" > /root/files/a.txt
+
+    # test detection that file has changed (and non-interactive mode doesn't work)
+    RUN acbup --config=acbup.conf 2>&1 | tee output.txt
+    RUN cat output.txt | grep 'local copy of /root/files/a.txt has been changed since backup'
+    # test backuped copy still exists
+    RUN ls /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130
+    RUN test "$(cat /root/bkup/data/d0/46/cd/d046cd9b7ffb7661e449683313d41f6fc33e3130 | sha1sum | awk '{print $1}')" = "d046cd9b7ffb7661e449683313d41f6fc33e3130"
